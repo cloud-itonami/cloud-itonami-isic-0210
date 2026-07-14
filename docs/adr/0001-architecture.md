@@ -18,8 +18,16 @@ rollout pattern established across the cloud-itonami fleet.
 This vertical has NO bespoke domain capability library in `kotoba-lang` to
 wrap (verified: no `kotoba-lang/forestry`-style repo exists). This build
 therefore uses self-contained domain logic — pure functions in
-`forestry.registry` (stand maturity checks, health-status validation, supply
-budget verification) are re-verified independently by the governor.
+`forestry.registry` (`stand-immature-for-harvest?` stand-maturity checks
+against `maturity-threshold-years`, `health-status-valid?` health-status
+validation, `order-total-matches-claim?`/`order-exceeds-threshold?` supply
+budget verification, plus `register-field-operation`/`register-supply-order`
+draft-record construction) are re-verified independently by
+`forestry.governor` — the same "ground truth, not self-report" discipline
+established across prior actors. `forestry.store` ships a single `MemStore`
+backend (no second Datomic-backed store): this vertical's SSoT needs no
+jurisdiction-scoped parity requirement, and a second backend can be added
+later behind the same `Store` protocol without changing any caller.
 
 This blueprint's own `:itonami.blueprint/governor` keyword,
 `:forest-coordination-governor`, is grep-verified UNIQUE fleet-wide.
@@ -83,8 +91,23 @@ regulatory reporting) — this is a standalone coordinator blueprint.
 
 ## Verification
 
-- `cloud-itonami-isic-0210`: `clojure -M:dev:test` green (all tests pass),
-  `clojure -M:lint` clean, `clojure -M:dev:run` demo narrative exercises
-  proposal submission, escalation, and HARD hold scenarios.
-- All source is `.cljc` (portable ClojureScript / JVM / nbb).
-- Audit ledger is append-only, all decisions are traced.
+- `cloud-itonami-isic-0210`: `clojure -M:test` (and the equivalent
+  `clojure -M:dev:test`) green (all tests pass) across
+  `forestry.operation-test`, `forestry.governor-contract-test`,
+  `forestry.phase-test`, `forestry.store-contract-test` and
+  `forestry.registry-test`; `clojure -M:dev:run` demo narrative exercises
+  proposal submission, escalation, and every HARD-hold scenario directly
+  (not-propose-effect, unknown-op, stand-not-verified,
+  stand-immature-for-harvest, harvest-finalize-blocked, already-scheduled,
+  invalid-health-status, order-total-mismatch) plus the over-threshold
+  order-supplies ESCALATE (not HOLD) case.
+- All source is `.cljc` (portable ClojureScript / JVM / nbb) — no JVM-only
+  interop; the actor graph is invoked exclusively via `langgraph.graph/run*`
+  (not `.invoke`, which an earlier draft of this repo used and which is not
+  cljs-portable).
+- Audit ledger is append-only, all decisions are traced; every settled
+  request (commit or hold) leaves exactly one ledger fact.
+- `deps.edn` pins `io.github.kotoba-lang/langgraph` and
+  `io.github.kotoba-lang/langchain` via `:local/root` directly in the
+  top-level `:deps` (not only under a `:dev` alias), so a bare
+  `clojure -M:test` resolves offline inside the monorepo checkout.

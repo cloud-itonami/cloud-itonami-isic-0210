@@ -1,57 +1,155 @@
 (ns forestry.sim
-  "Demo driver for the ForestryOperationActor. Walk through a few silviculture
-  scenarios: stand assessment logging, field operation scheduling."
-  (:require [forestry.operation :as op]
+  "Demo driver -- `clojure -M:dev:run`. Walks a clean stand through
+  intake -> field-operation scheduling (escalate/approve) -> forest-
+  health-concern flag (escalate/approve) -> supply-order proposal
+  (escalate/approve), then shows HARD-hold scenarios: a mis-wired
+  request whose own `:effect` is not `:propose`, an unrecognized op, a
+  field-operation scheduled against an UNVERIFIED stand, a harvest
+  scheduled against an IMMATURE stand, a proposal that tries to
+  FINALIZE a harvest plan (permanently blocked, no override), a
+  double-schedule of the same field operation, a stand-record patch
+  with a fabricated health-status, and a supply order whose claimed
+  total doesn't match its own line items -- plus one supply order that
+  is CLEAN but exceeds the cost threshold, which escalates rather than
+  auto-commits.
+
+  Like every sibling actor's own demo, each check is exercised directly
+  and independently below, one request per HARD-hold scenario, the SAME
+  'exercise the failure mode directly, never only via a happy-path
+  actuation' discipline `parksafety`'s ADR-2607071922 Decision 5 and
+  every sibling since establish."
+  (:require [langgraph.graph :as g]
             [forestry.store :as store]
-            [forestry.phase :as phase]))
+            [forestry.operation :as op]))
+
+(def coordinator {:actor-id "coord-1" :actor-role :forestry-coordinator :phase 3})
+
+(defn- exec-op [actor tid request context]
+  (g/run* actor {:request request :context context} {:thread-id tid}))
+
+(defn- approve! [actor tid]
+  (g/run* actor {:approval {:status :approved :by "coord-1"}} {:thread-id tid :resume? true}))
 
 (defn -main [& _args]
-  (let [s (-> (store/mem-store) (store/sample-data!))
-        actor (op/build s)]
+  (let [db (-> (store/mem-store) (store/sample-data!))
+        actor (op/build db)]
 
-    (println "=== ForestryOperationActor Demo ===\n")
+    (println "== log-stand-record stand-001 (clean patch -> phase-3 auto-commit) ==")
+    (println (exec-op actor "t1"
+                       {:op :log-stand-record :effect :propose :subject "stand-001"
+                        :patch {:health-status :healthy :last-assessed "2026-07-14"}}
+                       coordinator))
 
-    ;; Scenario 1: Log a stand record (assessment proposal)
-    (println "Scenario 1: Proposing stand assessment log")
-    (let [request {:op :log-stand-record
-                   :effect :propose
-                   :subject "stand-001"}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
-          result (-> actor (.invoke {:request request :context context}))]
-      (println "  Disposition:" (:disposition result))
-      (println "  Ledger entry count:" (count (store/get-ledger s)))
-      (println))
+    (println "== schedule-field-operation op-1 on stand-001 (verified, mature, thinning -- escalates, approve) ==")
+    (let [r (exec-op actor "t2"
+                      {:op :schedule-field-operation :effect :propose :subject "op-1"
+                       :value {:stand-id "stand-001" :operation-type :thinning
+                               :scheduled-date "2026-08-01" :finalize? false}}
+                      coordinator)]
+      (println r)
+      (println "-- human forester approves --")
+      (println (approve! actor "t2")))
 
-    ;; Scenario 2: Field operation scheduling (always requires approval)
-    (println "Scenario 2: Proposing field operation schedule")
-    (let [request {:op :schedule-field-operation
-                   :effect :propose
-                   :subject "thinning-operation-001"}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
-          result (-> actor (.invoke {:request request :context context}))]
-      (println "  Disposition:" (:disposition result))
-      (println "  Reason:" (first (filter #(= :approval-requested (:t %))
-                                           (store/get-ledger s))))
-      (println))
+    (println "== schedule-field-operation op-2 on stand-001 (verified, mature, harvest DRAFT -- escalates, approve) ==")
+    (let [r (exec-op actor "t3"
+                      {:op :schedule-field-operation :effect :propose :subject "op-2"
+                       :value {:stand-id "stand-001" :operation-type :harvest
+                               :scheduled-date "2026-09-01" :finalize? false}}
+                      coordinator)]
+      (println r)
+      (println "-- human forester approves --")
+      (println (approve! actor "t3")))
 
-    ;; Scenario 3: Forest health concern (always escalates)
-    (println "Scenario 3: Flagging forest health concern (always escalates)")
-    (let [request {:op :flag-forest-health-concern
-                   :effect :propose
-                   :subject "pest-outbreak-detection"}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
-          result (-> actor (.invoke {:request request :context context}))]
-      (println "  Disposition:" (:disposition result))
-      (println "  Ledger entries:" (count (store/get-ledger s)))
-      (println))
+    (println "== flag-forest-health-concern concern-1 on stand-001 (always escalates -- approve) ==")
+    (let [r (exec-op actor "t4"
+                      {:op :flag-forest-health-concern :effect :propose :subject "concern-1"
+                       :value {:stand-id "stand-001" :severity :moderate
+                               :description "早期の樹皮甲虫被害の兆候"}}
+                      coordinator)]
+      (println r)
+      (println "-- human forester approves --")
+      (println (approve! actor "t4")))
 
-    (println "=== Demo Complete ===")
-    (println "\nFinal audit ledger:")
-    (doseq [entry (store/get-ledger s)]
-      (println "  " entry))))
+    (println "== order-supplies order-1 (clean, matching total, below threshold -- escalates, approve) ==")
+    (let [r (exec-op actor "t5"
+                      {:op :order-supplies :effect :propose :subject "order-1"
+                       :value {:items [{:name "seedlings" :qty 500 :unit-cost 2.0}
+                                       {:name "tree-shelters" :qty 500 :unit-cost 1.5}]
+                               :claimed-total 1750.0}}
+                      coordinator)]
+      (println r)
+      (println "-- human purchasing approver approves --")
+      (println (approve! actor "t5")))
+
+    (println "\n-- HARD-hold scenarios --\n")
+
+    (println "== log-stand-record with :effect other than :propose -> HARD hold (structural) ==")
+    (println (exec-op actor "t6"
+                       {:op :log-stand-record :effect :direct-write :subject "stand-001"
+                        :patch {:health-status :healthy}}
+                       coordinator))
+
+    (println "== unrecognized op -> HARD hold ==")
+    (println (exec-op actor "t7"
+                       {:op :dispatch-harvester :effect :propose :subject "stand-001"}
+                       coordinator))
+
+    (println "== schedule-field-operation op-3 on stand-003 (UNVERIFIED -> HARD hold) ==")
+    (println (exec-op actor "t8"
+                       {:op :schedule-field-operation :effect :propose :subject "op-3"
+                        :value {:stand-id "stand-003" :operation-type :thinning
+                                :scheduled-date "2026-08-01" :finalize? false}}
+                       coordinator))
+
+    (println "== schedule-field-operation op-4 harvest on stand-002 (IMMATURE, age 8 < 20 -> HARD hold) ==")
+    (println (exec-op actor "t9"
+                       {:op :schedule-field-operation :effect :propose :subject "op-4"
+                        :value {:stand-id "stand-002" :operation-type :harvest
+                                :scheduled-date "2026-08-01" :finalize? false}}
+                       coordinator))
+
+    (println "== schedule-field-operation op-5 on stand-001 with :finalize? true -> HARD hold, PERMANENT, never reaches a human ==")
+    (println (exec-op actor "t10"
+                       {:op :schedule-field-operation :effect :propose :subject "op-5"
+                        :value {:stand-id "stand-001" :operation-type :harvest
+                                :scheduled-date "2026-09-01" :finalize? true}}
+                       coordinator))
+
+    (println "== schedule-field-operation op-1 AGAIN (double-schedule -> HARD hold) ==")
+    (println (exec-op actor "t11"
+                       {:op :schedule-field-operation :effect :propose :subject "op-1"
+                        :value {:stand-id "stand-001" :operation-type :thinning
+                                :scheduled-date "2026-08-01" :finalize? false}}
+                       coordinator))
+
+    (println "== log-stand-record stand-001 with a fabricated health-status -> HARD hold ==")
+    (println (exec-op actor "t12"
+                       {:op :log-stand-record :effect :propose :subject "stand-001"
+                        :patch {:health-status :thriving-fabricated}}
+                       coordinator))
+
+    (println "== order-supplies order-2 (claimed 1000.0 vs recompute 750.0 -> HARD hold) ==")
+    (println (exec-op actor "t13"
+                       {:op :order-supplies :effect :propose :subject "order-2"
+                        :value {:items [{:name "chainsaw-fuel" :qty 100 :unit-cost 7.5}]
+                                :claimed-total 1000.0}}
+                       coordinator))
+
+    (println "== order-supplies order-3 (clean but exceeds cost threshold -> ESCALATE, not HOLD -- approve) ==")
+    (let [r (exec-op actor "t14"
+                      {:op :order-supplies :effect :propose :subject "order-3"
+                       :value {:items [{:name "harvester-head" :qty 2 :unit-cost 4000.0}]
+                               :claimed-total 8000.0}}
+                      coordinator)]
+      (println r)
+      (println "-- human purchasing approver approves --")
+      (println (approve! actor "t14")))
+
+    (println "\n== audit ledger ==")
+    (doseq [f (store/ledger db)] (println f))
+
+    (println "\n== draft field-operation records ==")
+    (doseq [r (store/operation-history db)] (println r))
+
+    (println "\n== draft supply-order records ==")
+    (doseq [r (store/order-history db)] (println r))))

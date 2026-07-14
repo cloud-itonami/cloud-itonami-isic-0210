@@ -1,8 +1,21 @@
 (ns forestry.operation-test
+  "Smoke tests for the compiled ForestryOperationActor graph itself
+  (build + one happy path per op). The governor's full rule contract
+  (HARD holds, escalation, phase gating) is exercised in
+  `forestry.governor-contract-test`; the Store contract in
+  `forestry.store-contract-test`."
   (:require [clojure.test :refer [deftest is testing]]
+            [langgraph.graph :as g]
             [forestry.operation :as op]
-            [forestry.store :as store]
-            [forestry.phase :as phase]))
+            [forestry.store :as store]))
+
+(def coordinator {:actor-id "coord-1" :actor-role :forestry-coordinator :phase 3})
+
+(defn- exec-op [actor tid request context]
+  (g/run* actor {:request request :context context} {:thread-id tid}))
+
+(defn- approve! [actor tid]
+  (g/run* actor {:approval {:status :approved :by "coord-1"}} {:thread-id tid :resume? true}))
 
 (deftest test-actor-builds
   (testing "ForestryOperationActor can be built with a store"
@@ -10,60 +23,52 @@
           actor (op/build s)]
       (is (not (nil? actor))))))
 
-(deftest test-stand-assessment-proposal
-  (testing "Proposing a stand assessment logs correctly"
+(deftest test-stand-record-logging-proposal
+  (testing "Proposing a stand-record log auto-commits when clean (phase 3, no physical/financial risk)"
     (let [s (-> (store/mem-store) (store/sample-data!))
           actor (op/build s)
-          request {:op :log-stand-record
-                   :effect :propose
-                   :subject "stand-001"}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
           initial-ledger-size (count (store/get-ledger s))
-          result (-> actor (.invoke {:request request :context context}))
+          result (exec-op actor "t1"
+                          {:op :log-stand-record :effect :propose :subject "stand-001"
+                           :patch {:health-status :healthy}}
+                          coordinator)
           final-ledger-size (count (store/get-ledger s))]
       (is (> final-ledger-size initial-ledger-size))
-      (is (some? result)))))
+      (is (= :commit (get-in result [:state :disposition]))))))
 
 (deftest test-field-operation-scheduling
-  (testing "Field operation scheduling is proposed"
+  (testing "Field operation scheduling always escalates for human approval"
     (let [s (-> (store/mem-store) (store/sample-data!))
           actor (op/build s)
-          request {:op :schedule-field-operation
-                   :effect :propose
-                   :subject "thinning-operation-001"}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
-          result (-> actor (.invoke {:request request :context context}))]
-      (is (some? result)))))
+          result (exec-op actor "t2"
+                          {:op :schedule-field-operation :effect :propose :subject "op-1"
+                           :value {:stand-id "stand-001" :operation-type :thinning
+                                   :scheduled-date "2026-08-01" :finalize? false}}
+                          coordinator)]
+      (is (= :interrupted (:status result)))
+      (is (= :commit (get-in (approve! actor "t2") [:state :disposition]))))))
 
 (deftest test-forest-health-concern-escalation
   (testing "Forest health concerns always escalate"
     (let [s (-> (store/mem-store) (store/sample-data!))
           actor (op/build s)
-          request {:op :flag-forest-health-concern
-                   :effect :propose
-                   :subject "pest-outbreak"}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
-          result (-> actor (.invoke {:request request :context context}))]
-      (is (some? result)))))
+          result (exec-op actor "t3"
+                          {:op :flag-forest-health-concern :effect :propose :subject "concern-1"
+                           :value {:stand-id "stand-001" :severity :moderate :description "pest sighting"}}
+                          coordinator)]
+      (is (= :interrupted (:status result))))))
 
 (deftest test-supply-order-proposal
-  (testing "Supply order proposal is submitted"
+  (testing "Supply order proposal is submitted and (when below threshold + matching) escalates for approval"
     (let [s (-> (store/mem-store) (store/sample-data!))
           actor (op/build s)
-          request {:op :order-supplies
-                   :effect :propose
-                   :subject {:items ["seedlings" "equipment"]}}
-          context {:actor-id "forestry-actor-01"
-                   :role :coordinator
-                   :phase phase/default-phase}
-          result (-> actor (.invoke {:request request :context context}))]
-      (is (some? result)))))
+          result (exec-op actor "t4"
+                          {:op :order-supplies :effect :propose :subject "order-1"
+                           :value {:items [{:name "seedlings" :qty 100 :unit-cost 2.0}]
+                                   :claimed-total 200.0}}
+                          coordinator)]
+      (is (some? result))
+      (is (= :interrupted (:status result))))))
 
 (deftest test-ledger-is-append-only
   (testing "Audit ledger is append-only"
@@ -73,7 +78,7 @@
       (is (= (inc initial-count) (count (store/get-ledger s)))))))
 
 (deftest test-records-are-committed
-  (testing "Records can be committed to store"
+  (testing "The domain-agnostic commit-record! path stores a raw record by :id"
     (let [s (store/mem-store)
           record {:id "test-001" :data "test"}]
       (store/commit-record! s record)
