@@ -1,0 +1,42 @@
+{:itonami.blueprint/id "cloud-itonami-isic-0210"
+ :itonami.blueprint/name "Silviculture and other forestry activities"
+ :itonami.blueprint/isic-rev5 "0210"
+ :itonami.blueprint/domain :forestry/silviculture
+ :itonami.blueprint/license "AGPL-3.0-or-later"
+ :itonami.blueprint/social-impact [:sustainable-forestry :forest-health :rural-employment]
+ :itonami.blueprint/governor :forest-coordination-governor
+ :itonami.blueprint/robotics false
+ :itonami.blueprint/required-technologies [:forest-ecology :identity :forms :audit-ledger :scheduling]
+ :itonami.blueprint/optional-technologies []
+ :itonami.blueprint/status :public-oss
+ :itonami.blueprint/maturity :implemented
+ :itonami.blueprint/implemented-slice
+ "ForestryAdvisor ⊣ Forest Coordination Governor, langgraph-clj
+ StateGraph, append-only audit ledger. A BACK-OFFICE COORDINATION actor
+ for community silviculture operations (stand assessment -> field-
+ operation scheduling (planting/thinning/harvest) -> forest-health
+ monitoring -> supply procurement) -- not direct logging-equipment or
+ field-operation control authority; `:itonami.blueprint/robotics` is
+ honestly `false` (see README `What this actor does NOT do`). Four ops
+ (`:log-stand-record` / `:schedule-field-operation` / `:flag-forest-
+ health-concern` / `:order-supplies`), all `:effect :propose` only.
+ Nine concrete governor checks (`forestry.governor`) elaborate this
+ blueprint's HARD invariants: propose-only effect, closed op
+ allowlist, closed proposal-effect allowlist (no direct logging-
+ equipment control), permanent harvest-finalize block, independent
+ stand-verification check before any field-operation scheduling,
+ independent stand-maturity recompute (`forestry.registry/maturity-
+ threshold-years`, 20 years) for harvest eligibility, double-schedule
+ guard, closed health-status validation, and independent supply-order
+ total recompute against its own line items. Forest-health-concern
+ flagging ALWAYS escalates to a human forester regardless of
+ confidence, and any supply order whose independently-recomputed total
+ exceeds `forestry.registry/supply-order-cost-threshold` (5000.0)
+ escalates too; `:log-stand-record` is the only op eligible to
+ auto-commit, and only at phase 3 when governor-clean
+ (`forestry.phase`). No external `kotoba-lang/forestry`-style capability
+ library exists to wrap (see docs/adr/0001-architecture.md Decision 1)
+ -- domain logic is self-contained pure functions in `forestry.registry`,
+ re-verified independently by `forestry.governor`, backed by a single
+ `MemStore` (`forestry.store`). Verified: `clojure -M:test` green
+ (64 tests, 160 assertions, 0 failures, 0 errors as of 2026-07-22)."}
