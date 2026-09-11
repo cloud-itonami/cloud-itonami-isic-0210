@@ -91,11 +91,11 @@ regulatory reporting) — this is a standalone coordinator blueprint.
 
 ## Verification
 
-- `cloud-itonami-isic-0210`: `clojure -M:test` (and the equivalent
-  `clojure -M:dev:test`) green (all tests pass) across
+- `cloud-itonami-isic-0210`: `kbb -M:test` (and the equivalent
+  `kbb -M:dev:test`) green (all tests pass) across
   `forestry.operation-test`, `forestry.governor-contract-test`,
   `forestry.phase-test`, `forestry.store-contract-test` and
-  `forestry.registry-test`; `clojure -M:dev:run` demo narrative exercises
+  `forestry.registry-test`; `kbb -M:dev:run` demo narrative exercises
   proposal submission, escalation, and every HARD-hold scenario directly
   (not-propose-effect, unknown-op, stand-not-verified,
   stand-immature-for-harvest, harvest-finalize-blocked, already-scheduled,
@@ -110,4 +110,4 @@ regulatory reporting) — this is a standalone coordinator blueprint.
 - `deps.edn` pins `io.github.kotoba-lang/langgraph` and
   `io.github.kotoba-lang/langchain` via `:local/root` directly in the
   top-level `:deps` (not only under a `:dev` alias), so a bare
-  `clojure -M:test` resolves offline inside the monorepo checkout.
+  `kbb -M:test` resolves offline inside the monorepo checkout.

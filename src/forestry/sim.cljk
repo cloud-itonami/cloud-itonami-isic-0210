@@ -1,5 +1,5 @@
 (ns forestry.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks a clean stand through
+  "Demo driver -- `kbb -M:dev:run`. Walks a clean stand through
   intake -> field-operation scheduling (escalate/approve) -> forest-
   health-concern flag (escalate/approve) -> supply-order proposal
   (escalate/approve), then shows HARD-hold scenarios: a mis-wired

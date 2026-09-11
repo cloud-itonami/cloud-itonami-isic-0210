@@ -38,5 +38,5 @@
  library exists to wrap (see docs/adr/0001-architecture.md Decision 1)
  -- domain logic is self-contained pure functions in `forestry.registry`,
  re-verified independently by `forestry.governor`, backed by a single
- `MemStore` (`forestry.store`). Verified: `clojure -M:test` green
+ `MemStore` (`forestry.store`). Verified: `kbb -M:test` green
  (64 tests, 160 assertions, 0 failures, 0 errors as of 2026-07-22)."}

@@ -6,7 +6,7 @@
    been surveyed, never a routine inventory-log patch.
 2. Import historical stand-inventory, field-operation and supply-order
    records for continuity of the audit ledger.
-3. Run the demo (`clojure -M:dev:run`) to dry-run every commit, escalate
+3. Run the demo (`kbb -M:dev:run`) to dry-run every commit, escalate
    and HARD-hold path against the sample stand set
    (`forestry.store/sample-data!`) before pointing this at real stands.
 4. Configure the phase (`forestry.phase`, default 3) and confirm which
